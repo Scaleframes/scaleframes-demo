@@ -61,6 +61,10 @@ Ta bort en säljare: ta bort raden i `users` och posten i `sellers.json`, och st
 
 ## 5. Starta
 
+Snabbast: kör `sudo bash install.sh` i mappen `deploy/` på servern. Skriptet installerar Docker, öppnar portarna, skapar `screego.env` med serverns IP och en hemlig nyckel, frågar efter tokens och lösenord och startar tjänsten.
+
+Manuellt:
+
 ```sh
 cd deploy
 cp screego.env.example screego.env      # fyll i CHANGE-värdena
