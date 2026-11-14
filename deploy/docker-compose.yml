@@ -1,0 +1,21 @@
+# Scaleframes Demo: the demo server plus a Cloudflare Tunnel for https://demo.scaleframes.com.
+# The TURN relay (3478 and 50000-50200) needs a public IP, so the demo server uses the host network.
+services:
+  demo:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    env_file: screego.env
+    volumes:
+      - ./users:/data/users:ro
+      - ./sellers.json:/data/sellers.json:ro
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    network_mode: host
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
