@@ -24,7 +24,10 @@ ufw --force enable
 cd /opt/scaleframes-demo/deploy
 
 set +x # keep tokens out of the log
-. /root/sfdemo-secrets.env
+# Parse instead of source: the pasted Cloudflare line can hold the whole install command.
+HUBSPOT_TOKEN=$(sed -n 's/^HUBSPOT_TOKEN=//p' /root/sfdemo-secrets.env | tr -d '[:space:]')
+CLOUDFLARE_TUNNEL_TOKEN=$(grep '^CLOUDFLARE_TUNNEL_TOKEN=' /root/sfdemo-secrets.env | grep -oE 'eyJ[A-Za-z0-9_=.-]{20,}' | head -1)
+[ -n "$CLOUDFLARE_TUNNEL_TOKEN" ] || { echo "No Cloudflare tunnel token found"; exit 1; }
 ip=$(curl -fsS http://169.254.169.254/hetzner/v1/metadata/public-ipv4 || curl -fsS4 https://api.ipify.org)
 sed -e "s|^SCREEGO_EXTERNAL_IP=.*|SCREEGO_EXTERNAL_IP=${ip}|" \
     -e "s|^SCREEGO_SECRET=.*|SCREEGO_SECRET=$(openssl rand -hex 32)|" \
