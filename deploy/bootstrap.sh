@@ -4,6 +4,12 @@
 set -euxo pipefail
 exec > >(tee -a /var/log/sfdemo-bootstrap.log) 2>&1
 
+# Swap: the image build needs more than 1 GB RAM on the smallest servers.
+if [ ! -f /swapfile ]; then
+  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
 apt-get update
 apt-get install -y git ufw curl
 command -v docker || curl -fsSL https://get.docker.com | sh
