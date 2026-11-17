@@ -3,6 +3,7 @@ package router
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -36,6 +37,8 @@ type UIConfig struct {
 	ViewSeller *sf.Seller `json:"viewSeller,omitempty"`
 	HubSpot    bool       `json:"hubspot"`
 }
+
+var sellerPath = regexp.MustCompile(`^/[a-z0-9-]{2,32}/?$`)
 
 func Router(conf config.Config, rooms *ws.Rooms, users *auth.Users, version string, sellers sf.Sellers, hubspot *sf.HubSpot) *mux.Router {
 	router := mux.NewRouter()
@@ -111,7 +114,17 @@ func Router(conf config.Config, rooms *ws.Rooms, users *auth.Users, version stri
 		URL:         base + "/",
 		Image:       base + "/og-banner.png",
 	})
-	// Seller demo links: /<slug>. Unknown slugs fall through to 404.
+	// A mistyped demo link gets the branded page with a "link not found" message.
+	notFoundPage := ui.Index(ui.Meta{Lang: "en", Title: "Scaleframes Demo", Description: "Live screen sharing from Scaleframes.", URL: base + "/", Image: base + "/og-banner.png"})
+	router.NotFoundHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		accessLogger(r, 404, 0, 0)
+		if r.Method == http.MethodGet && sellerPath.MatchString(r.URL.Path) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusNotFound)
+			notFoundPage(w, r)
+		}
+	})
+	// Seller demo links: /<slug>.
 	for slug, seller := range sellers {
 		title, description := seller.Preview()
 		router.Methods("GET").Path("/" + slug).Handler(ui.Index(ui.Meta{

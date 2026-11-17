@@ -4,6 +4,7 @@ import {Room} from './Room';
 import {UseConfig, useConfig, viewSellerSlug} from './useConfig';
 import {ViewerPage} from './ViewerPage';
 import {SellerApp} from './SellerApp';
+import {NotFoundLink} from './NotFoundLink';
 
 export const Router = () => {
     const config = useConfig();
@@ -12,8 +13,12 @@ export const Router = () => {
         // show spinner
         return null;
     }
-    if (viewSellerSlug() && config.viewSeller) {
-        return <ViewerPage config={config} seller={config.viewSeller} />;
+    if (viewSellerSlug()) {
+        return config.viewSeller ? (
+            <ViewerPage config={config} seller={config.viewSeller} />
+        ) : (
+            <NotFoundLink />
+        );
     }
     if (config.loggedIn && config.seller) {
         return <SellerApp config={config} seller={config.seller} />;

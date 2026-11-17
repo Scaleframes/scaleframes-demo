@@ -20,6 +20,8 @@ export type ConnectedRoom = {
     ws: WebSocket;
     hostStream?: MediaStream;
     clientStreams: ClientStream[];
+    // Connection state of each viewer session, as the host sees it.
+    hostConnections?: Record<string, RTCPeerConnectionState>;
 } & RoomInfo;
 
 interface ClientStream {
@@ -36,6 +38,27 @@ export interface UseRoom {
     stopShare: () => void;
 }
 
+// A candidate can arrive before the remote description is set. addIceCandidate then fails and
+// the candidate is lost, which can be the only working (relay) path on mobile networks.
+const pendingIce: Record<string, RTCIceCandidateInit[]> = {};
+const addIce = (
+    sid: string,
+    peer: RTCPeerConnection | undefined,
+    candidate: RTCIceCandidateInit
+) => {
+    if (!peer || !peer.remoteDescription) {
+        (pendingIce[sid] ??= []).push(candidate);
+        return;
+    }
+    peer.addIceCandidate(candidate).catch((err) => console.log('addIceCandidate', err));
+};
+const flushIce = (sid: string, peer: RTCPeerConnection) => {
+    (pendingIce[sid] ?? []).forEach((c) =>
+        peer.addIceCandidate(c).catch((err) => console.log('addIceCandidate', err))
+    );
+    delete pendingIce[sid];
+};
+
 const relayConfig: Partial<RTCConfiguration> =
     window.location.search.indexOf('forceTurn=true') !== -1 ? {iceTransportPolicy: 'relay'} : {};
 
@@ -45,12 +68,14 @@ const hostSession = async ({
     send,
     done,
     stream,
+    onState,
 }: {
     sid: string;
     ice: ICEServer[];
     send: (e: OutgoingMessage) => void;
     done: () => void;
     stream: MediaStream;
+    onState: (s: RTCPeerConnectionState) => void;
 }): Promise<RTCPeerConnection> => {
     const peer = new RTCPeerConnection({...relayConfig, iceServers: ice});
     peer.onicecandidate = (event) => {
@@ -62,6 +87,7 @@ const hostSession = async ({
 
     peer.onconnectionstatechange = (event) => {
         console.log('host change', event);
+        onState(peer.connectionState);
         if (peer.connectionState === 'closed' || peer.connectionState === 'failed') {
             peer.close();
             done();
@@ -113,12 +139,14 @@ const clientSession = async ({
     send,
     done,
     onTrack,
+    onFailed,
 }: {
     sid: string;
     ice: ICEServer[];
     send: (e: OutgoingMessage) => void;
     onTrack: (s: MediaStream) => void;
     done: () => void;
+    onFailed?: () => void;
 }): Promise<RTCPeerConnection> => {
     console.log('ice', ice);
     const peer = new RTCPeerConnection({...relayConfig, iceServers: ice});
@@ -130,9 +158,13 @@ const clientSession = async ({
     };
     peer.onconnectionstatechange = (event) => {
         console.log('client change', event);
-        if (peer.connectionState === 'closed' || peer.connectionState === 'failed') {
+        const failed = peer.connectionState === 'failed';
+        if (failed || peer.connectionState === 'closed') {
             peer.close();
             done();
+            if (failed) {
+                onFailed?.();
+            }
         }
     };
 
@@ -157,11 +189,13 @@ export interface UseRoomOptions {
     onClosed?: (reason: string, joined: boolean) => void;
     // false: do not write ?room= into the URL and do not join from the URL on load.
     syncURL?: boolean;
+    // Called when a viewer connection fails, so the caller can reconnect.
+    onPeerFailed?: () => void;
 }
 
 export const useRoom = (
     config: UIConfig,
-    {onClosed, syncURL = true}: UseRoomOptions = {}
+    {onClosed, syncURL = true, onPeerFailed}: UseRoomOptions = {}
 ): UseRoom => {
     const [roomID, setRoomIDInURL] = useRoomID();
     const setRoomID = syncURL ? setRoomIDInURL : () => {};
@@ -215,6 +249,18 @@ export const useRoom = (
                                 ice: event.payload.iceServers,
                                 send,
                                 done: () => delete host.current[event.payload.id],
+                                onState: (s) =>
+                                    setState((current) =>
+                                        current
+                                            ? {
+                                                  ...current,
+                                                  hostConnections: {
+                                                      ...current.hostConnections,
+                                                      [event.payload.id]: s,
+                                                  },
+                                              }
+                                            : current
+                                    ),
                             }).then((peer) => {
                                 host.current[event.payload.id] = peer;
                             });
@@ -225,6 +271,7 @@ export const useRoom = (
                                 sid,
                                 send,
                                 ice: event.payload.iceServers,
+                                onFailed: onPeerFailed,
                                 done: () => {
                                     delete client.current[sid];
                                     setState((current) =>
@@ -257,18 +304,27 @@ export const useRoom = (
                             }).then((peer) => (client.current[event.payload.id] = peer));
                             return;
                         case 'clientice':
-                            host.current[event.payload.sid]?.addIceCandidate(event.payload.value);
-                            return;
-                        case 'clientanswer':
-                            host.current[event.payload.sid]?.setRemoteDescription(
+                            addIce(
+                                event.payload.sid,
+                                host.current[event.payload.sid],
                                 event.payload.value
                             );
                             return;
+                        case 'clientanswer': {
+                            const hostPeer = host.current[event.payload.sid];
+                            hostPeer
+                                ?.setRemoteDescription(event.payload.value)
+                                .then(() => flushIce(event.payload.sid, hostPeer));
+                            return;
+                        }
                         case 'hostoffer':
                             (async () => {
                                 await client.current[event.payload.sid]?.setRemoteDescription(
                                     event.payload.value
                                 );
+                                if (client.current[event.payload.sid]) {
+                                    flushIce(event.payload.sid, client.current[event.payload.sid]);
+                                }
                                 const answer =
                                     await client.current[event.payload.sid]?.createAnswer();
                                 await client.current[event.payload.sid]?.setLocalDescription(
@@ -281,7 +337,11 @@ export const useRoom = (
                             })();
                             return;
                         case 'hostice':
-                            client.current[event.payload.sid]?.addIceCandidate(event.payload.value);
+                            addIce(
+                                event.payload.sid,
+                                client.current[event.payload.sid],
+                                event.payload.value
+                            );
                             return;
                         case 'endshare':
                             client.current[event.payload]?.close();
@@ -324,13 +384,13 @@ export const useRoom = (
                     setState(false);
                 };
                 ws.onopen = () => {
-                    create.payload.username = loadSettings().name;
+                    create.payload.username = loadSettings().name || create.payload.username;
                     send(create);
                 };
             });
         },
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        [setState, enqueueSnackbar, syncURL, onClosed]
+        [setState, enqueueSnackbar, syncURL, onClosed, onPeerFailed]
     );
 
     const share = async (picked?: MediaStream) => {

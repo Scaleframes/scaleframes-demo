@@ -43,4 +43,6 @@ install -m 644 /root/sfdemo-sellers.json sellers.json
 docker compose up -d --build
 sleep 5
 curl -fsS http://127.0.0.1:5050/health
+# Keep the server on the newest code from GitHub.
+echo '*/5 * * * * root /opt/scaleframes-demo/deploy/update.sh >> /var/log/sfdemo-update.log 2>&1' > /etc/cron.d/sfdemo-update
 echo "Scaleframes Demo is running. Public IP: ${ip}"

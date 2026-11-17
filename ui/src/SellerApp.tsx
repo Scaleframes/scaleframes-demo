@@ -16,7 +16,8 @@ import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PresentToAllIcon from '@mui/icons-material/PresentToAll';
 import {useSnackbar} from 'notistack';
-import {Contact, RoomMode, Seller} from './message';
+import QRCode from 'qrcode';
+import {Contact, RoomMode, RoomUser, Seller} from './message';
 import {UseConfig} from './useConfig';
 import {useRoom} from './useRoom';
 import {loadSettings} from './settings';
@@ -93,7 +94,8 @@ export const SellerApp = ({config, seller}: {config: UseConfig; seller: Seller})
         setContact(undefined);
     };
 
-    const viewers = state ? state.users.filter((u) => !u.owner).length : 0;
+    const viewers = state ? state.users.filter((u) => !u.owner) : [];
+    const connections = Object.values(state ? (state.hostConnections ?? {}) : {});
 
     return (
         <Box sx={{minHeight: '100%', bgcolor: 'background.default'}}>
@@ -149,6 +151,7 @@ export const SellerApp = ({config, seller}: {config: UseConfig; seller: Seller})
                 {state ? (
                     <LivePanel
                         viewers={viewers}
+                        connections={connections}
                         hostStream={state.hostStream}
                         contact={contact}
                         onResume={() => share()}
@@ -182,6 +185,7 @@ export const SellerApp = ({config, seller}: {config: UseConfig; seller: Seller})
                         >
                             Tip: share one Chrome tab, not your whole screen.
                         </Typography>
+                        <PhoneTest link={link} />
                     </>
                 )}
             </Box>
@@ -191,28 +195,35 @@ export const SellerApp = ({config, seller}: {config: UseConfig; seller: Seller})
 
 const LivePanel = ({
     viewers,
+    connections,
     hostStream,
     contact,
     onResume,
     onEnd,
 }: {
-    viewers: number;
+    viewers: RoomUser[];
+    connections: RTCPeerConnectionState[];
     hostStream?: MediaStream;
     contact?: Contact;
     onResume: () => void;
     onEnd: () => void;
 }) => (
     <Paper sx={{p: 2.5}}>
-        <Box sx={{display: 'flex', alignItems: 'center', gap: 1.5, mb: 2}}>
-            {viewers > 0 ? <CheckCircleIcon sx={{color: '#16A34A'}} /> : <PulseDot size={12} />}
+        <Box sx={{display: 'flex', alignItems: 'center', gap: 1.5, mb: 1}}>
+            {connections.includes('connected') ? (
+                <CheckCircleIcon sx={{color: '#16A34A'}} />
+            ) : (
+                <PulseDot size={12} />
+            )}
             <Typography sx={{fontWeight: 600}}>
-                {viewers === 0
-                    ? 'Waiting for the customer to open the link'
-                    : viewers === 1
-                      ? 'The customer is watching'
-                      : `${viewers} people are watching`}
+                {liveStatus(viewers.length, connections, !!hostStream)}
             </Typography>
         </Box>
+        {viewers.length > 0 && (
+            <Typography color="text.secondary" sx={{mb: 2, fontSize: 14}}>
+                {viewers.map((v) => v.name).join(', ')}
+            </Typography>
+        )}
         {contact && (
             <Typography color="text.secondary" sx={{mb: 2, fontSize: 14}}>
                 Logged in HubSpot on {contact.name || contact.email}
@@ -356,6 +367,50 @@ const ContactPicker = ({
                       ? 'No contact found. The demo will not be tracked in HubSpot.'
                       : 'Pick the customer so the demo counts in the HubSpot stats.'}
             </Typography>
+        </Paper>
+    );
+};
+
+const liveStatus = (
+    viewers: number,
+    connections: RTCPeerConnectionState[],
+    sharing: boolean
+): string => {
+    if (viewers === 0) return 'Waiting for the customer to open the link';
+    if (!sharing) return 'The customer has the link open. Share a tab to show the screen.';
+    if (connections.includes('connected')) {
+        return viewers === 1 ? 'The customer is watching' : `${viewers} people are watching`;
+    }
+    if (connections.includes('failed')) {
+        return 'The connection failed. The customer page reconnects by itself. If it keeps failing, ask them to switch between Wi-Fi and mobile data.';
+    }
+    return 'The customer opened the link. Connecting the picture …';
+};
+
+// QR code so the seller can test the customer view on their own phone.
+const PhoneTest = ({link}: {link: string}) => {
+    const [src, setSrc] = React.useState<string>();
+    React.useEffect(() => {
+        QRCode.toDataURL(link, {
+            margin: 1,
+            width: 240,
+            color: {dark: '#1C1917', light: '#F7F4ED'},
+        }).then(setSrc);
+    }, [link]);
+    if (!src) return null;
+    return (
+        <Paper sx={{p: 2.5, mt: 3, display: 'flex', alignItems: 'center', gap: 2}}>
+            <img
+                src={src}
+                alt="QR code for your demo link"
+                style={{width: 96, height: 96, borderRadius: 8}}
+            />
+            <Box>
+                <Typography sx={{fontWeight: 600}}>Test on your phone</Typography>
+                <Typography color="text.secondary" sx={{fontSize: 14}}>
+                    Scan the code to see exactly what the customer sees. Try it on mobile data too.
+                </Typography>
+            </Box>
         </Paper>
     );
 };
